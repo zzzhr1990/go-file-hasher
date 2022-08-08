@@ -3,10 +3,13 @@ package bthash
 import (
 	"crypto/sha1"
 	"crypto/sha256"
+	"encoding/hex"
 	"hash"
+	"hash/crc32"
 	"io"
 	"math/bits"
 	"os"
+	"strconv"
 )
 
 const (
@@ -14,8 +17,8 @@ const (
 )
 
 type FileHasher struct {
-	path      string
-	length    int64
+	Path      string
+	Length    int64
 	Piecesv2  [][]byte
 	Piecesv1  [][]byte
 	Sha1      []byte
@@ -30,8 +33,8 @@ func CreateNewHasher(path string, pieceLength int64) (*FileHasher, error) {
 		pieceLength = 65536
 	}
 	hasher := &FileHasher{
-		path:     path,
-		length:   0,
+		Path:     path,
+		Length:   0,
 		Piecesv1: make([][]byte, 0),
 		Piecesv2: make([][]byte, 0),
 	}
@@ -65,7 +68,7 @@ func CreateNewHasher(path string, pieceLength int64) (*FileHasher, error) {
 				break
 			}
 			actRead := block[:blockRead]
-			hasher.length += int64(blockRead)
+			hasher.Length += int64(blockRead)
 			residue -= int64(blockRead)
 			s256 := sha256.New()
 			s256.Write(actRead)
@@ -113,7 +116,7 @@ func CreateNewHasher(path string, pieceLength int64) (*FileHasher, error) {
 	}
 	hasher.Sha1 = sha1Hasher.Sum(nil)
 	hasher.HeadSha1 = headSha1Hasher.Sum(nil)
-	if hasher.length > 0 {
+	if hasher.Length > 0 {
 		layerHashes := hasher.Piecesv2
 		if len(hasher.Piecesv2) > 1 {
 			// # flatten piecesv2 into a single bytes object since that is what is needed for the 'piece layers' field
@@ -152,6 +155,27 @@ func (hasher *FileHasher) AppendPadding() []byte {
 
 func (hasher *FileHasher) DiscardPadding() []byte {
 	return hasher.padHasher.Sum(nil)
+}
+
+func (hasher *FileHasher) Sha1String() string {
+	return hex.EncodeToString(hasher.Sha1)
+}
+
+func (hasher *FileHasher) HeadSha1String() string {
+	return hex.EncodeToString(hasher.HeadSha1)
+}
+
+func (hasher *FileHasher) RootString() string {
+	return hex.EncodeToString(hasher.Root)
+}
+
+func (hasher *FileHasher) UniqueID() string {
+
+	prefix := strconv.FormatInt(hasher.Length, 36)
+	if hasher.Length > 0 {
+		prefix = prefix + "_" + hex.EncodeToString(hasher.Root)
+	}
+	return prefix + "_" + strconv.FormatInt(int64(crc32.ChecksumIEEE([]byte(prefix))), 36)
 }
 
 func rootHash(hashes [][]byte) []byte {
