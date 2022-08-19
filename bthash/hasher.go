@@ -34,7 +34,9 @@ type FileHasher struct {
 }
 
 func CreateNewHasher(path string, pieceLength int64, ctx context.Context) (*FileHasher, error) {
-
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	resultChan := make(chan *FileHasher)
 	errorChan := make(chan error, 1)
 	var taskFlag int32 = 0
@@ -73,6 +75,9 @@ func CreateNewHasher(path string, pieceLength int64, ctx context.Context) (*File
 func doCreate(path string, pieceLength int64, flag *int32) (*FileHasher, error) {
 	if pieceLength < 1 {
 		pieceLength = 65536
+	}
+	if pieceLength < BlockSize {
+		pieceLength = BlockSize
 	}
 	hasher := &FileHasher{
 		Path:     path,
@@ -232,4 +237,48 @@ func rootHash(hashes [][]byte) []byte {
 		hashes = newHashes
 	}
 	return hashes[0]
+}
+
+func CalcPieces(blockData []byte, pieceLength int64, firstPiece bool) []byte {
+	if pieceLength < 1 {
+		pieceLength = 65536
+	}
+	if len(blockData) == 0 {
+		return []byte{}
+	}
+	if pieceLength < BlockSize {
+		pieceLength = BlockSize
+	}
+	blocksPerPiece := pieceLength / BlockSize // BLOCK_SIZE
+
+	blocks := [][]byte{}
+	for i := 0; i < len(blockData); i += BlockSize {
+		end := i + BlockSize
+
+		// necessary check to avoid slicing beyond
+		// slice capacity
+		if end > len(blockData) {
+			end = len(blockData)
+		}
+		sx := sha256.Sum256(blockData[i:end])
+		blocks = append(blocks, sx[:])
+	}
+	if len(blocks) == 0 {
+		return []byte{}
+	}
+	if len(blocks) != int(blocksPerPiece) {
+		var leavesRequired int64
+		if firstPiece { // first block
+			leavesRequired = 1 << bits.Len(uint(len(blocks))-1) // find the smallest power of 2 that is >= len(blocks)
+		} else {
+			leavesRequired = blocksPerPiece
+		}
+		for i := 0; i < int(leavesRequired-int64(len(blocks))); i++ {
+			blocks = append(blocks, make([]byte, 32))
+		}
+		// blocks for the last piece are padded with 0s
+		// blocks = blocks + [b'\x00' * 32] * (leaves_required - len(blocks))
+		// rootHash requires the number of leaves to be a power of 2
+	}
+	return rootHash(blocks)
 }
