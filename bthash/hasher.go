@@ -1,16 +1,21 @@
 package bthash
 
 import (
+	"context"
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"hash"
 	"hash/crc32"
 	"io"
 	"math/bits"
 	"os"
 	"strconv"
+	"sync/atomic"
 )
+
+var ErrTaskCanceled = errors.New("task canceled")
 
 const (
 	BlockSize = 16384
@@ -28,7 +33,44 @@ type FileHasher struct {
 	Root      []byte
 }
 
-func CreateNewHasher(path string, pieceLength int64) (*FileHasher, error) {
+func CreateNewHasher(path string, pieceLength int64, ctx context.Context) (*FileHasher, error) {
+
+	resultChan := make(chan *FileHasher)
+	errorChan := make(chan error, 1)
+	var taskFlag int32 = 0
+
+	defer func() {
+		close(resultChan)
+		close(errorChan)
+	}()
+	go func(path string, pieceLength int64) {
+		hasher, err := doCreate(path, pieceLength, &taskFlag)
+		if err != nil {
+			errorChan <- err
+		} else {
+			resultChan <- hasher
+		}
+	}(path, pieceLength)
+	select {
+	case <-ctx.Done():
+		atomic.StoreInt32(&taskFlag, 1)
+		return nil, ctx.Err()
+	case res := <-resultChan:
+		return res, nil
+	case err := <-errorChan:
+		return nil, err
+
+	}
+
+	//fc := (fSize + pieceLength - 1) / pieceLength
+	//if int64(len(hasher.Piecesv2)) != fc {
+	//	panic("hasher.Piecesv2 != fc, path:" + path)
+	//}
+
+	// return hasher, nil
+}
+
+func doCreate(path string, pieceLength int64, flag *int32) (*FileHasher, error) {
 	if pieceLength < 1 {
 		pieceLength = 65536
 	}
@@ -54,6 +96,9 @@ func CreateNewHasher(path string, pieceLength int64) (*FileHasher, error) {
 	headSha1Hasher := sha1.New()
 	byteHeadReadLeft := 128 * 1024
 	for {
+		if atomic.LoadInt32(flag) == 1 {
+			return nil, ErrTaskCanceled
+		}
 		residue := pieceLength
 		blocks := [][]byte{}
 		v1hasher := sha1.New()
@@ -139,12 +184,6 @@ func CreateNewHasher(path string, pieceLength int64) (*FileHasher, error) {
 		}
 		hasher.Root = rootHash(layerHashes)
 	}
-
-	//fc := (fSize + pieceLength - 1) / pieceLength
-	//if int64(len(hasher.Piecesv2)) != fc {
-	//	panic("hasher.Piecesv2 != fc, path:" + path)
-	//}
-
 	return hasher, nil
 }
 
